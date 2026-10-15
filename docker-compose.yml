@@ -1,0 +1,9 @@
+services:
+  mgp-stats:
+    image: ${MGP_DOCKER_USERNAME:-pablovaobar}/mgp-stats
+    build: .
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
