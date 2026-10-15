@@ -79,6 +79,13 @@ def _val(obj: Any) -> str:
     return str(obj) if obj else ""
 
 
+def _short_name(full: str) -> str:
+    parts = full.rsplit(" ", 1)
+    if len(parts) > 1 and parts[0]:
+        return f"{parts[0][0]}. {parts[-1]}"
+    return full
+
+
 def _event_name(e: dict[str, Any]) -> str:
     for field in ("name", "full_name", "event_name", "description"):
         val = e.get(field)
@@ -252,12 +259,10 @@ async def get_rider_standings(
         rider = c.get("rider", {}) or {}
         team = c.get("team", {}) or {}
         full = rider.get("full_name", "")
-        parts = full.rsplit(" ", 1)
-        surname = parts[-1] if len(parts) > 1 else full
         result.append(
             {
                 "pos": _to_int(c.get("position", 0)),
-                "name": surname,
+                "name": _short_name(full),
                 "team": team.get("name", ""),
                 "pts": _to_int(c.get("points", 0)),
             }
@@ -302,12 +307,10 @@ async def get_race_results(
     for r in riders:
         rider = r.get("rider", {}) or {}
         full = rider.get("full_name", "")
-        parts = full.rsplit(" ", 1)
-        surname = parts[-1] if len(parts) > 1 else full
         result.append(
             {
                 "pos": _to_int(r.get("position", 0)),
-                "name": surname,
+                "name": _short_name(full),
                 "num": _to_int(rider.get("number", 0)),
                 "team": (r.get("team") or {}).get("name", ""),
                 "laps": _to_int(r.get("laps", 0)),
