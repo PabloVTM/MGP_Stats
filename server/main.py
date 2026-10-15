@@ -3,11 +3,10 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException
 
 from server.gp_client import (
     get_calendar,
-    get_event_sessions,
     get_next_event,
     get_rider_standings,
 )
@@ -41,28 +40,11 @@ async def next_event(year: int | None = None):
         raise HTTPException(503, f"Erreur API MotoGP: {e}")
 
 
-@app.get("/api/v1/sessions")
-async def sessions(
-    round: int = Query(..., description="Numéro du round"),
-    year: int | None = None,
-    category: str = "MotoGP",
-):
-    """Horaires des séances pour un GP donné (FP1-4, Q1/Q2, RAC, SPR...)."""
-    try:
-        data = await get_event_sessions(round, year, category)
-        return {"sessions": data}
-    except Exception as e:
-        raise HTTPException(503, f"Erreur API MotoGP: {e}")
-
-
 @app.get("/api/v1/standings")
-async def rider_standings(
-    year: int | None = None,
-    category: str = "MotoGP",
-):
-    """Classement pilotes d'une catégorie (MotoGP, Moto2, Moto3, MotoE)."""
+async def rider_standings(year: int | None = None):
+    """Classement pilotes MotoGP (position, nom, points)."""
     try:
-        data = await get_rider_standings(year, category)
+        data = await get_rider_standings(year)
         return {"drv": data}
     except Exception as e:
         raise HTTPException(503, f"Erreur API MotoGP: {e}")
