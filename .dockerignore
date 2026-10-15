@@ -3,3 +3,7 @@ __pycache__
 .git
 *.pyc
 .DS_Store
+.pytest_cache
+tests/
+.github/
+*.md
