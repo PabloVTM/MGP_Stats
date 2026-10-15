@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 BASE_URL = os.getenv("MGP_API_URL") or "https://api.pulselive.motogp.com/motogp/v1"
 API_KEY = os.getenv("MGP_API_KEY") or ""
 TIMEOUT = httpx.Timeout(20.0)
+MAX_RETRIES = 3
 
 _HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
@@ -27,6 +28,23 @@ if API_KEY:
     _HEADERS["Authorization"] = f"Bearer {API_KEY}"
 
 cache = TTLCache()
+_inflight: dict[str, asyncio.Task] = {}
+_client: httpx.AsyncClient | None = None
+
+
+def _get_client() -> httpx.AsyncClient:
+    """Client HTTP partagé (connection pooling), créé à la première utilisation."""
+    global _client
+    if _client is None:
+        _client = httpx.AsyncClient(timeout=TIMEOUT, headers=_HEADERS)
+    return _client
+
+
+async def close_client() -> None:
+    global _client
+    if _client is not None:
+        await _client.aclose()
+        _client = None
 
 
 def _now() -> datetime:
@@ -44,29 +62,45 @@ def _weekend_ttl() -> int:
 async def _fetch(path: str) -> Any:
     url = f"{BASE_URL}/{path}"
     cached = cache.get(url)
-    if cached:
+    if cached is not None:
         return cached
-    for attempt in range(3):
-        async with httpx.AsyncClient(timeout=TIMEOUT, headers=_HEADERS) as client:
+    # Déduplication : les requêtes concurrentes partagent le même fetch.
+    # La tâche est retirée du dict dès sa complétion (pas de fuite mémoire).
+    task = _inflight.get(url)
+    if task is None:
+        task = asyncio.create_task(_fetch_upstream(url))
+        _inflight[url] = task
+        task.add_done_callback(lambda _t, u=url: _inflight.pop(u, None))
+    return await task
+
+
+async def _fetch_upstream(url: str) -> Any:
+    client = _get_client()
+    last_exc: Exception = httpx.HTTPError(f"Échec après {MAX_RETRIES} tentatives: {url}")
+    for attempt in range(MAX_RETRIES):
+        try:
             resp = await client.get(url)
-            if resp.status_code == 429:
-                wait = 4 ** attempt
-                logger.warning("429 sur %s, attente %ds", url, wait)
-                await asyncio.sleep(wait)
-                continue
-            resp.raise_for_status()
-            data = resp.json()
-            cache.set(url, data, ttl=_weekend_ttl())
-            return data
-    logger.error("Abandon après 3 tentatives pour %s", url)
-    raise httpx.HTTPStatusError(
-        "429 Too Many Requests (after 3 retries)",
-        request=resp.request,
-        response=resp,
-    )
+        except (httpx.TimeoutException, httpx.NetworkError) as e:
+            last_exc = e
+        else:
+            if resp.status_code != 429 and resp.status_code < 500:
+                resp.raise_for_status()
+                data = resp.json()
+                cache.set(url, data, ttl=_weekend_ttl())
+                return data
+            last_exc = httpx.HTTPStatusError(
+                f"{resp.status_code} (after {MAX_RETRIES} retries)",
+                request=resp.request,
+                response=resp,
+            )
+        wait = 4 ** attempt
+        logger.warning("Retry %d/%d sur %s, attente %ds (%s)", attempt + 1, MAX_RETRIES, url, wait, last_exc)
+        await asyncio.sleep(wait)
+    logger.error("Abandon après %d tentatives pour %s", MAX_RETRIES, url)
+    raise last_exc
 
 
-def _to_int(val: str | int | float) -> int:
+def _to_int(val: str | float) -> int:
     try:
         return int(float(val))
     except (ValueError, TypeError):
@@ -79,31 +113,21 @@ def _val(obj: Any) -> str:
     return str(obj) if obj else ""
 
 
+def _event_name(e: dict[str, Any]) -> str:
+    for field in ("name", "full_name", "event_name", "description"):
+        val = e.get(field)
+        if val:
+            raw = _val(val).strip()
+            if raw:
+                return raw
+    return ""
+
+
 def _short_name(full: str) -> str:
     parts = full.rsplit(" ", 1)
     if len(parts) > 1 and parts[0]:
         return f"{parts[0][0]}. {parts[-1]}"
     return full
-
-
-def _event_name(e: dict[str, Any]) -> str:
-    for field in ("name", "full_name", "event_name", "description"):
-        val = e.get(field)
-        if val:
-            raw = _val(val)
-            if raw:
-                return raw
-    return ""
-
-
-def _event_short(e: dict[str, Any]) -> str:
-    for field in ("shortname", "short_name", "short", "code", "abbreviation"):
-        val = e.get(field)
-        if val:
-            raw = _val(val)
-            if raw:
-                return raw
-    return ""
 
 
 # ── Season helpers ────────────────────────────────────────────────────────────
@@ -127,25 +151,6 @@ async def _category_uuid(season_uuid: str, category: str = "MotoGP") -> str:
     return ""
 
 
-async def _event_uuid(event_round: int, year: int) -> str:
-    events = await _fetch(f"events?seasonYear={year}")
-    for e in events:
-        if e.get("kind") != "GP":
-            continue
-        if _to_int(e.get("sequence", 0)) == event_round:
-            return e["id"]
-    return ""
-
-
-async def _results_event_uuid(event_round: int, year: int) -> str:
-    """results-api-event-uuid (nécessaire pour les endpoints /results/…)."""
-    uid = await _event_uuid(event_round, year)
-    if not uid:
-        return ""
-    detail = await _fetch(f"events/{uid}")
-    return detail.get("results-api-event-uuid", "")
-
-
 # ── Calendar ──────────────────────────────────────────────────────────────────
 
 
@@ -161,8 +166,7 @@ async def get_calendar(year: int | None = None) -> list[dict[str, Any]]:
             {
                 "rnd": _to_int(e.get("sequence", 0)),
                 "name": _event_name(e),
-                "short": _event_short(e),
-                "date": e.get("date_start", ""),
+                "date": (e.get("date_start") or "")[:10],
             }
         )
     return sorted(result, key=lambda x: x["rnd"])
@@ -172,80 +176,32 @@ async def get_calendar(year: int | None = None) -> list[dict[str, Any]]:
 
 
 async def get_next_event(year: int | None = None) -> dict[str, Any] | None:
-    year = year or _current_year()
+    explicit_year = year is not None
     cal = await get_calendar(year)
-    now = _now()
+    today = _now().strftime("%Y-%m-%d")
     for r in cal:
-        try:
-            d = datetime.fromisoformat(r["date"])
-            if d.replace(tzinfo=UTC) > now:
-                return r
-        except (ValueError, TypeError):
-            continue
+        if r["date"] >= today:
+            return r
+    if explicit_year:
+        return cal[-1] if cal else None
+    # Hors saison : bascule sur le premier GP de l'année suivante
+    next_year_cal = await get_calendar(_current_year() + 1)
+    if next_year_cal:
+        return next_year_cal[0]
     return cal[-1] if cal else None
-
-
-# ── Sessions for an Event ─────────────────────────────────────────────────────
-
-
-_SESSION_MAP = {
-    "FP": "fp", "FP1": "fp1", "FP2": "fp2", "FP3": "fp3", "FP4": "fp4",
-    "PR": "pr", "PR1": "pr1", "PR2": "pr2",
-    "Q1": "q1", "Q2": "q2",
-    "RAC": "race", "WUP": "wup",
-    "SPR": "sprint", "SPR1": "sq1", "SPR2": "sq2",
-}
-
-
-async def get_event_sessions(
-    event_round: int, year: int | None = None, category: str = "MotoGP"
-) -> list[dict[str, Any]]:
-    year = year or _current_year()
-    season_uuid = await _season_uuid(year)
-    if not season_uuid:
-        return []
-    cat_uuid = await _category_uuid(season_uuid, category)
-    if not cat_uuid:
-        return []
-    ruuid = await _results_event_uuid(event_round, year)
-    if not ruuid:
-        return []
-
-    sessions = await _fetch(
-        f"results/sessions?eventUuid={ruuid}&categoryUuid={cat_uuid}"
-    )
-
-    result = []
-    for s in sessions:
-        stype = s.get("type", "")
-        key = _SESSION_MAP.get(stype, stype.lower())
-        raw_dt = s.get("date", "")
-        raw_time = s.get("time", "")
-        dt_str = raw_dt
-        if raw_time:
-            dt_str = f"{raw_dt}T{raw_time}"
-        result.append(
-            {
-                "s": key,
-                "dt": dt_str,
-                "num": _to_int(s.get("number", 0)),
-                "finished": s.get("status") == "3",
-            }
-        )
-    return result
 
 
 # ── Rider Standings ───────────────────────────────────────────────────────────
 
 
 async def get_rider_standings(
-    year: int | None = None, category: str = "MotoGP"
+    year: int | None = None
 ) -> list[dict[str, Any]]:
     year = year or _current_year()
     season_uuid = await _season_uuid(year)
     if not season_uuid:
         return []
-    cat_uuid = await _category_uuid(season_uuid, category)
+    cat_uuid = await _category_uuid(season_uuid, "MotoGP")
     if not cat_uuid:
         return []
 
@@ -257,64 +213,12 @@ async def get_rider_standings(
     result = []
     for c in classification:
         rider = c.get("rider", {}) or {}
-        team = c.get("team", {}) or {}
         full = rider.get("full_name", "")
         result.append(
             {
                 "pos": _to_int(c.get("position", 0)),
                 "name": _short_name(full),
-                "team": team.get("name", ""),
                 "pts": _to_int(c.get("points", 0)),
-            }
-        )
-    return result
-
-
-# ── Race Results ──────────────────────────────────────────────────────────────
-
-
-async def get_race_results(
-    event_round: int, year: int | None = None, category: str = "MotoGP"
-) -> list[dict[str, Any]]:
-    year = year or _current_year()
-    season_uuid = await _season_uuid(year)
-    if not season_uuid:
-        return []
-    cat_uuid = await _category_uuid(season_uuid, category)
-    if not cat_uuid:
-        return []
-    ruuid = await _results_event_uuid(event_round, year)
-    if not ruuid:
-        return []
-
-    sessions = await _fetch(
-        f"results/sessions?eventUuid={ruuid}&categoryUuid={cat_uuid}"
-    )
-
-    race_session = None
-    for s in sessions:
-        if s.get("type") == "RAC":
-            race_session = s
-            break
-    if not race_session:
-        return []
-
-    riders = race_session.get("riders", []) or []
-    if not isinstance(riders, list):
-        return []
-
-    result = []
-    for r in riders:
-        rider = r.get("rider", {}) or {}
-        full = rider.get("full_name", "")
-        result.append(
-            {
-                "pos": _to_int(r.get("position", 0)),
-                "name": _short_name(full),
-                "num": _to_int(rider.get("number", 0)),
-                "team": (r.get("team") or {}).get("name", ""),
-                "laps": _to_int(r.get("laps", 0)),
-                "time": r.get("time", ""),
             }
         )
     return result

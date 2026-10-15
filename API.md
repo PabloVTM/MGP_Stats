@@ -19,6 +19,8 @@ GET /api/v1/health
 }
 ```
 
+Exclue du rate limit.
+
 ---
 
 ## Calendrier
@@ -27,9 +29,9 @@ GET /api/v1/health
 GET /api/v1/calendar?year=2026
 ```
 
-| Param | Type | Défaut |
-|---|---|---|
-| `year` | int | année courante |
+| Param | Type | Défaut | Contrainte |
+|---|---|---|---|
+| `year` | int | année courante | 1949 – 2100 |
 
 ```json
 {
@@ -37,7 +39,6 @@ GET /api/v1/calendar?year=2026
     {
       "rnd": 1,
       "name": "Qatar Grand Prix",
-      "short": "QAT",
       "date": "2026-03-08"
     }
   ]
@@ -48,7 +49,6 @@ GET /api/v1/calendar?year=2026
 |---|---|
 | `rnd` | Numéro du round |
 | `name` | Nom du Grand Prix |
-| `short` | Code court (QAT, SPA, ITA...) |
 | `date` | Date de début |
 
 ---
@@ -61,83 +61,45 @@ GET /api/v1/next?year=2026
 
 ```json
 {
-  "next": { "rnd": 3, "name": "Spanish Grand Prix", "short": "SPA", "date": "2026-04-19" }
+  "next": { "rnd": 3, "name": "Spanish Grand Prix", "date": "2026-04-19" }
 }
 ```
 
----
+Sans paramètre `year`, si tous les GP de l'année en cours sont passés
+(hors saison), l'endpoint retourne automatiquement le premier GP de l'année
+suivante. Avec un `year` explicite dont tous les GP sont passés, il retourne
+le dernier GP de cette année-là.
 
-## Séances d'un GP
-
-```
-GET /api/v1/sessions?round=N&category=MotoGP
-```
-
-| Param | Type | Défaut |
-|---|---|---|
-| `round` | int | **obligatoire** |
-| `category` | string | `MotoGP` (MotoGP, Moto2, Moto3, MotoE) |
-
-```json
-{
-  "sessions": [
-    { "s": "fp1", "dt": "2026-03-08T09:00:00", "num": 1, "finished": true },
-    { "s": "fp2", "dt": "2026-03-08T12:00:00", "num": 1, "finished": true },
-    { "s": "fp3", "dt": "2026-03-09T08:00:00", "num": 1, "finished": true },
-    { "s": "q1", "dt": "2026-03-09T10:00:00", "num": 1, "finished": true },
-    { "s": "q2", "dt": "2026-03-09T13:00:00", "num": 1, "finished": true },
-    { "s": "wup", "dt": "2026-03-10T08:00:00", "num": 1, "finished": false },
-    { "s": "race", "dt": "2026-03-10T11:00:00", "num": 1, "finished": false }
-  ]
-}
-```
-
-| Clé `s` | Séance |
-|---|---|
-| `fp1`-`fp4` | Essais libres 1 à 4 |
-| `q1`, `q2` | Qualifications |
-| `race` | Course |
-| `sprint` | Sprint |
-| `sq1`, `sq2` | Qualifs sprint |
-| `wup` | Warm-up |
+Un GP dont la date est le jour J reste le « prochain GP » jusqu'à minuit UTC.
 
 ---
 
 ## Classement pilotes
 
 ```
-GET /api/v1/standings?category=MotoGP
+GET /api/v1/standings?year=2026
 ```
 
-| Param | Type | Défaut |
-|---|---|---|
-| `category` | string | `MotoGP` |
+| Param | Type | Défaut | Contrainte |
+|---|---|---|---|
+| `year` | int | année courante | 1949 – 2100 |
+
+Catégorie MotoGP uniquement.
 
 ```json
 {
   "drv": [
-    { "pos": 1, "name": "Martin", "team": "Prima Pramac Racing", "pts": 508 },
-    { "pos": 2, "name": "Bagnaia", "team": "Ducati Lenovo Team", "pts": 489 }
+    { "pos": 1, "name": "J. Martin", "pts": 355 },
+    { "pos": 2, "name": "F. Bagnaia", "pts": 340 }
   ]
 }
 ```
 
----
-
-## Résultats d'une course
-
-```
-GET /api/v1/results/race?round=N&category=MotoGP
-```
-
-```json
-{
-  "res": [
-    { "pos": 1, "name": "Martin", "num": 89, "team": "Prima Pramac Racing", "laps": 24, "time": "41:12.345" },
-    { "pos": 2, "name": "Bagnaia", "num": 1, "team": "Ducati Lenovo Team", "laps": 24, "time": "+0.845" }
-  ]
-}
-```
+| Champ | Description |
+|---|---|
+| `pos` | Position au championnat |
+| `name` | Nom abrégé (initiale du prénom + nom) |
+| `pts` | Points |
 
 ---
 
@@ -147,8 +109,15 @@ GET /api/v1/results/race?round=N&category=MotoGP
 |---|---|
 | 200 | OK |
 | 404 | Endpoint inconnu |
-| 422 | Paramètre `round` manquant |
+| 422 | Paramètre invalide (ex. `year` hors plage) |
+| 429 | Rate limit dépassé (30 req/min par IP) |
 | 503 | API MotoGP amont injoignable |
+
+Exemple de réponse 429 :
+
+```json
+{ "err": "rate_limit", "msg": "Trop de requêtes, réessaie dans quelques secondes" }
+```
 
 ---
 
@@ -158,9 +127,12 @@ GET /api/v1/results/race?round=N&category=MotoGP
 |---|---|---|
 | `MGP_API_URL` | `https://api.pulselive.motogp.com/motogp/v1` | API source |
 | `MGP_API_KEY` | (vide) | Clé d'API si fournisseur alternatif |
+| `MGP_ENABLE_DOCS` | (vide = off) | Expose `/docs` et `/openapi.json` |
 
 ---
 
 ## Swagger
 
-Documentation interactive : `http://<serveur>:8000/docs`
+La documentation interactive `/docs` est **désactivée par défaut** en prod.
+L'activer en définissant `MGP_ENABLE_DOCS=true`, puis :
+`http://<serveur>:8000/docs`

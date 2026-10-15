@@ -1,9 +1,20 @@
 services:
   mgp-stats:
-    image: ${MGP_DOCKER_USERNAME:-pablovaobar}/mgp-stats
+    image: ${MGP_DOCKER_USERNAME:?MGP_DOCKER_USERNAME requis}/mgp-stats
     build: .
     ports:
       - "8000:8000"
     restart: unless-stopped
     environment:
       - PYTHONUNBUFFERED=1
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/api/v1/health', timeout=5).raise_for_status()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
