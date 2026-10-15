@@ -154,8 +154,7 @@ async def get_calendar(year: int | None = None) -> list[dict[str, Any]]:
             {
                 "rnd": _to_int(e.get("sequence", 0)),
                 "name": _event_name(e),
-                "short": _event_short(e),
-                "date": e.get("date_start", ""),
+                "date": (e.get("date_start") or "")[:10],
             }
         )
     return sorted(result, key=lambda x: x["rnd"])
