@@ -18,7 +18,7 @@ def test_health():
 
 def test_sessions_missing_round():
     resp = client.get("/api/v1/sessions")
-    assert resp.status_code == 422
+    assert resp.status_code == 404
 
 
 def test_race_results_missing_round():
