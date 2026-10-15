@@ -41,13 +41,10 @@ async def next_event(year: int | None = None):
 
 
 @app.get("/api/v1/standings")
-async def rider_standings(
-    year: int | None = None,
-    category: str = "MotoGP",
-):
-    """Classement pilotes d'une catégorie (MotoGP, Moto2, Moto3, MotoE)."""
+async def rider_standings(year: int | None = None):
+    """Classement pilotes MotoGP (position, nom, points)."""
     try:
-        data = await get_rider_standings(year, category)
+        data = await get_rider_standings(year)
         return {"drv": data}
     except Exception as e:
         raise HTTPException(503, f"Erreur API MotoGP: {e}")

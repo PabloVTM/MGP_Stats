@@ -89,6 +89,13 @@ def _event_name(e: dict[str, Any]) -> str:
     return ""
 
 
+def _short_name(full: str) -> str:
+    parts = full.rsplit(" ", 1)
+    if len(parts) > 1 and parts[0]:
+        return f"{parts[0][0]}. {parts[-1]}"
+    return full
+
+
 # ── Season helpers ────────────────────────────────────────────────────────────
 
 
@@ -148,13 +155,13 @@ async def get_next_event(year: int | None = None) -> dict[str, Any] | None:
 
 
 async def get_rider_standings(
-    year: int | None = None, category: str = "MotoGP"
+    year: int | None = None
 ) -> list[dict[str, Any]]:
     year = year or _current_year()
     season_uuid = await _season_uuid(year)
     if not season_uuid:
         return []
-    cat_uuid = await _category_uuid(season_uuid, category)
+    cat_uuid = await _category_uuid(season_uuid, "MotoGP")
     if not cat_uuid:
         return []
 
@@ -166,13 +173,11 @@ async def get_rider_standings(
     result = []
     for c in classification:
         rider = c.get("rider", {}) or {}
-        team = c.get("team", {}) or {}
         full = rider.get("full_name", "")
         result.append(
             {
                 "pos": _to_int(c.get("position", 0)),
                 "name": _short_name(full),
-                "team": team.get("name", ""),
                 "pts": _to_int(c.get("points", 0)),
             }
         )
