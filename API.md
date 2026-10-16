@@ -49,7 +49,7 @@ GET /api/v1/calendar?year=2026
 |---|---|
 | `rnd` | Numéro du round |
 | `name` | Nom du Grand Prix |
-| `date` | Date de début |
+| `date` | Date de la course (dimanche) |
 
 ---
 
