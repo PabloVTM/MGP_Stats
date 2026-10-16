@@ -29,8 +29,9 @@ def test_calendar_filters_sorts_strips(client):
     assert resp.status_code == 200
     cal = resp.json()["cal"]
     assert [r["rnd"] for r in cal] == [1, 2]
-    assert cal[0] == {"rnd": 1, "name": "Qatar Grand Prix", "date": "2026-03-08"}
+    assert cal[0] == {"rnd": 1, "name": "Qatar Grand Prix", "date": "2026-03-10"}  # +2j (dimanche)
     assert cal[1]["name"] == "Spanish Grand Prix"  # strippé
+    assert cal[1]["date"] == "2026-04-21"  # 2026-04-19 + 2j
 
 
 def test_calendar_invalid_year(client):

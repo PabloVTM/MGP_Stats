@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -130,6 +130,16 @@ def _short_name(full: str) -> str:
     return full
 
 
+def _race_date(date_start: str) -> str:
+    """Date de la course (dimanche) = début du weekend (vendredi) + 2 jours."""
+    raw = (date_start or "")[:10]
+    try:
+        dt = datetime.strptime(raw, "%Y-%m-%d")
+    except ValueError:
+        return raw
+    return (dt + timedelta(days=2)).strftime("%Y-%m-%d")
+
+
 # ── Season helpers ────────────────────────────────────────────────────────────
 
 
@@ -166,7 +176,7 @@ async def get_calendar(year: int | None = None) -> list[dict[str, Any]]:
             {
                 "rnd": _to_int(e.get("sequence", 0)),
                 "name": _event_name(e),
-                "date": (e.get("date_start") or "")[:10],
+                "date": _race_date(e.get("date_start") or ""),
             }
         )
     return sorted(result, key=lambda x: x["rnd"])
